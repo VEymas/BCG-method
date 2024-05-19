@@ -95,6 +95,7 @@ void matvec(Matrix_CSR matrix, double *vec, double *res_vec) {
     vector<int> rows = matrix.get_rows();
     vector<int> columns = matrix.get_columns();
     vector<double> values = matrix.get_values();
+    #pragma omp parallel for
     for (int i = 0; i < rows.size(); ++i) {
         int prev = (i == 0) ? 0 : rows[i - 1];
         double cur = 0;
