@@ -61,15 +61,15 @@ class Matrix_CSR { // CSR matrix format
             }
         }
 
-        vector<int> get_rows() {
+        vector<int> get_rows() const {
             return rows;
         }
 
-        vector<int> get_columns() {
+        vector<int> get_columns() const {
             return columns;
         }
 
-        vector<double> get_values() {
+        vector<double> get_values() const {
             return values;
         }
 
@@ -90,7 +90,7 @@ void print_vec(int size, double* vec) {
     cout << endl;
 }
 
-void matvec(Matrix_CSR matrix, double *vec, double *res_vec) {
+void matvec(const Matrix_CSR& matrix, double *vec, double *res_vec) {
 
     vector<int> rows = matrix.get_rows();
     vector<int> columns = matrix.get_columns();
@@ -107,7 +107,7 @@ void matvec(Matrix_CSR matrix, double *vec, double *res_vec) {
 }
 
 template <typename T>
-void BCG(T& matrix, T& transpose_matrix, void (*matvec)(const T, double *, double *), double *b, double *x, int size, int max_iter) {
+void BCG(const T& matrix, const T& transpose_matrix, double *b, double *x, int size, int max_iter) {
     double* p = new double[size];
     double* z = new double[size];
     double* s = new double[size];
@@ -152,7 +152,7 @@ void BCG(T& matrix, T& transpose_matrix, void (*matvec)(const T, double *, doubl
 }
 
 int main() {
-    int size = 100000;
+    int size = 10000;
     srand(time(0));
     vector<vector<double>> matrix_(size, vector<double>(size, 0));
     for (int i = 0; i < size; ++i) {
@@ -174,7 +174,7 @@ int main() {
         my_x[i] = 0;
     }
     auto begin = std::chrono::steady_clock::now();
-    BCG(matrix, matrix, &matvec, b, my_x, size, 1000);
+    BCG(matrix, matrix, b, my_x, size, 1000);
     auto end = std::chrono::steady_clock::now();
     auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - begin);
     std::cout << "The time: " << elapsed_ms.count() << " ms\n";

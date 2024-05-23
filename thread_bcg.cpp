@@ -61,15 +61,15 @@ class Matrix_CSR { // CSR matrix format
             }
         }
 
-        vector<int> get_rows() {
+        vector<int> get_rows() const {
             return rows;
         }
 
-        vector<int> get_columns() {
+        vector<int> get_columns() const {
             return columns;
         }
 
-        vector<double> get_values() {
+        vector<double> get_values() const {
             return values;
         }
 
@@ -90,7 +90,7 @@ void print_vec(int size, double* vec) {
     cout << endl;
 }
 
-void matvec_worker(Matrix_CSR matrix, double *vec, double *res_vec, int start, int end) {
+void matvec_worker(const Matrix_CSR& matrix, double *vec, double *res_vec, int start, int end) {
     vector<int> rows = matrix.get_rows();
     vector<int> columns = matrix.get_columns();
     vector<double> values = matrix.get_values();
@@ -104,7 +104,7 @@ void matvec_worker(Matrix_CSR matrix, double *vec, double *res_vec, int start, i
     }
 }
 
-void matvec(Matrix_CSR matrix, double *vec, double *res_vec) {
+void matvec(const Matrix_CSR& matrix, double *vec, double *res_vec) {
     const int num_threads = std::thread::hardware_concurrency();
     vector<std::thread> threads;
 
@@ -122,8 +122,12 @@ void matvec(Matrix_CSR matrix, double *vec, double *res_vec) {
     }
 }
 
+void daxpy_thread(double alpha, double* x, double* y, int size, int done) {
+    daxpy_(&size, &alpha, x, &ione, y, &ione);
+}
+
 template <typename T>
-void BCG(T& matrix, T& transpose_matrix, void (*matvec)(const T, double *, double *), double *b, double *x, int size, int max_iter) {
+void BCG(const T& matrix, const T& transpose_matrix, double *b, double *x, int size, int max_iter) {
     double* p = new double[size];
     double* z = new double[size];
     double* s = new double[size];
@@ -142,11 +146,15 @@ void BCG(T& matrix, T& transpose_matrix, void (*matvec)(const T, double *, doubl
     while (dnrm2_(&size, r, &ione) > 0.1) { // check r
         matvec(matrix, z, Az); // Az := A * z
         double alpha = p_r_product / ddot_(&size, s, &ione, Az, &ione); // alpha := (p, r) / (s, Az)
-        matvec(transpose_matrix, s, As); // As := AT * s
-        daxpy_(&size, &alpha, z, &ione, x, &ione); // x := x + alpha * z
         double malpha = -1 * alpha;
-        daxpy_(&size, &malpha, Az, &ione, r, &ione); // r := r - alpha * Az
-        daxpy_(&size, &malpha, As, &ione, p, &ione); // p := p - alpha * As
+        matvec(transpose_matrix, s, As); // As := AT * s
+
+        std::thread thread_x(daxpy_thread, alpha, std::ref(z), std::ref(x), size, std::ref(done));
+        std::thread thread_r(daxpy_thread, malpha, std::ref(Az), std::ref(r), size, std::ref(done));
+        std::thread thread_p(daxpy_thread, malpha, std::ref(As), std::ref(p), size, std::ref(done));
+        thread_x.join();
+        thread_r.join();
+        thread_p.join();
         double prev_p_r_product = p_r_product;
         p_r_product = ddot_(&size, p, &ione, r, &ione);
         double beta = p_r_product / prev_p_r_product; // beta := (p, r) / (p,r)_prev
@@ -168,7 +176,7 @@ void BCG(T& matrix, T& transpose_matrix, void (*matvec)(const T, double *, doubl
 }
 
 int main() {
-    int size = 10000;
+    int size = 30000;
     srand(time(0));
     vector<vector<double>> matrix_(size, vector<double>(size, 0));
     for (int i = 0; i < size; ++i) {
@@ -190,7 +198,7 @@ int main() {
         my_x[i] = 0;
     }
     auto begin = std::chrono::steady_clock::now();
-    BCG(matrix, matrix, &matvec, b, my_x, size, 1000);
+    BCG(matrix, matrix, b, my_x, size, 1000);
     auto end = std::chrono::steady_clock::now();
     auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - begin);
     std::cout << "The time: " << elapsed_ms.count() << " ms\n";
