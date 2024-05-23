@@ -153,13 +153,31 @@ int main() {
     int size = 20000;
     srand(time(0));
     vector<vector<double>> matrix_(size, vector<double>(size, 0));
+
     for (int i = 0; i < size; ++i) {
-        matrix_[i][i] = 4;
+        matrix_[i][i] = rand();
+        // matrix_[i][i] = 4;
+        // if (i + 1 < size) {
+        //     matrix_[i + 1][i] = 1;
+        //     matrix_[i][i + 1] = 1;
+        // }
         if (i + 1 < size) {
-            matrix_[i + 1][i] = 1;
-            matrix_[i][i + 1] = 1;
+            matrix_[i + 1][i] = rand() / 100000;
+            matrix_[i][i + 1] = rand() / 100000;
         }
+        // if (i + 2 < size) {
+        //     matrix_[i + 2][i] = rand() / 100000;
+        //     matrix_[i][i + 2] = rand() / 100000;
+        // }
     } 
+
+    // for (int i = 0; i < size; ++i) {
+    //     matrix_[i][i] = 4;
+    //     if (i + 1 < size) {
+    //         matrix_[i + 1][i] = 1;
+    //         matrix_[i][i + 1] = 1;
+    //     }
+    // } 
     Matrix_CSR matrix(matrix_);
     double *x = new double [size];
     double *b = new double [size];
@@ -179,5 +197,5 @@ int main() {
     for (int i = 0; i < size; ++i) {
         x[i] -= my_x[i];
     }
-    cout << dnrm2_(&size, x, &ione) << endl;
+    cout << "error - " << dnrm2_(&size, x, &ione) << endl;
 }

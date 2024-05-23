@@ -34,6 +34,42 @@ extern "C" { // y := a*x + y
     void daxpy_(const int *, const double *, const double *, const int *, double *, const int *);
 }
 
+double ddot_worker(int start, int end, double* vec1, double* vec2) {
+    double res = 0;
+    for (int i = start; i < end; ++i) {
+        res += vec1[i] * vec2[i];
+    }
+    return res;
+}
+
+double ddot(int size, double* vec1, double* vec2) {
+    const int num_threads = std::thread::hardware_concurrency();
+    int chunk_size = size / num_threads;
+    int leftover = size % num_threads;
+
+    std::vector<std::thread> threads;
+    std::vector<double> results(num_threads, 0.0);
+    int start = 0;
+
+    for (int i = 0; i < num_threads; ++i) {
+        int end = start + chunk_size + (i < leftover ? 1 : 0);
+        threads.emplace_back([&](int s, int e, double* v1, double* v2, double& result) {
+            result = ddot_worker(s, e, v1, v2);
+        }, start, end, std::ref(vec1), std::ref(vec2), std::ref(results[i]));
+        start = end;
+    }
+
+    for (std::thread& thread : threads) {
+        thread.join();
+    }
+
+    double res = 0;
+    for (double r : results) {
+        res += r;
+    }
+    return res;
+}
+
 class Matrix_CSR { // CSR matrix format
     public:
         Matrix_CSR(vector<vector<double>> matrix) {
@@ -113,8 +149,8 @@ void matvec(const Matrix_CSR& matrix, double *vec, double *res_vec) {
 
     for (int i = 0; i < num_threads; ++i) {
         int start = i * rows_per_thread;
-        int end = std::min((i + 1) * rows_per_thread, static_cast<int>(rows.size()));
-        threads.emplace_back(matvec_worker, matrix, vec, res_vec, start, end);
+        int end = min((i + 1) * rows_per_thread, static_cast<int>(rows.size()));
+        threads.emplace_back(matvec_worker, std::ref(matrix), vec, res_vec, start, end);
     }
 
     for (std::thread& thread : threads) {
@@ -142,26 +178,36 @@ void BCG(const T& matrix, const T& transpose_matrix, double *b, double *x, int s
     dcopy_(&size, r, &ione, z, &ione); // z := r
     dcopy_(&size, r, &ione, s, &ione); // s := r
     int iterations_cnt = 0;
-    double p_r_product = ddot_(&size, p, &ione, r, &ione);
+    double p_r_product = ddot(size, p, r);
     while (dnrm2_(&size, r, &ione) > 0.1) { // check r
         matvec(matrix, z, Az); // Az := A * z
-        double alpha = p_r_product / ddot_(&size, s, &ione, Az, &ione); // alpha := (p, r) / (s, Az)
+        double alpha = p_r_product / ddot(size, s, Az); // alpha := (p, r) / (s, Az)
         double malpha = -1 * alpha;
         matvec(transpose_matrix, s, As); // As := AT * s
 
-        std::thread thread_x(daxpy_thread, alpha, std::ref(z), std::ref(x), size, std::ref(done));
-        std::thread thread_r(daxpy_thread, malpha, std::ref(Az), std::ref(r), size, std::ref(done));
-        std::thread thread_p(daxpy_thread, malpha, std::ref(As), std::ref(p), size, std::ref(done));
+        std::thread thread_x(daxpy_thread, alpha, std::ref(z), std::ref(x), size, done);
+        std::thread thread_r(daxpy_thread, malpha, std::ref(Az), std::ref(r), size, done);
+        std::thread thread_p(daxpy_thread, malpha, std::ref(As), std::ref(p), size, done);
         thread_x.join();
         thread_r.join();
         thread_p.join();
         double prev_p_r_product = p_r_product;
-        p_r_product = ddot_(&size, p, &ione, r, &ione);
+        p_r_product = ddot(size, p, r);
         double beta = p_r_product / prev_p_r_product; // beta := (p, r) / (p,r)_prev
-        dscal_(&size, &beta, z, &ione); // z := beta * z
-        daxpy_(&size, &done, r, &ione, z, &ione); // z := beta * z + r
-        dscal_(&size, &beta, s, &ione); // s := beta * s
-        daxpy_(&size, &done, p, &ione, s, &ione); // s := beta * s + p
+
+        std::thread thread_z([&]() { // z := beta * z + r
+            dscal_(&size, &beta, z, &ione); // z := beta * z
+            daxpy_(&size, &done, r, &ione, z, &ione); // z := beta * z + r
+        });
+
+        std::thread thread_s([&]() { // s := beta * s + p
+            dscal_(&size, &beta, s, &ione); // s := beta * s
+            daxpy_(&size, &done, p, &ione, s, &ione); // s := beta * s + p
+        });
+
+        thread_z.join();
+        thread_s.join();
+
         ++iterations_cnt;
         if (iterations_cnt == max_iter) break; // check max_iter
     }
@@ -176,16 +222,34 @@ void BCG(const T& matrix, const T& transpose_matrix, double *b, double *x, int s
 }
 
 int main() {
-    int size = 30000;
+    int size = 20000;
     srand(time(0));
     vector<vector<double>> matrix_(size, vector<double>(size, 0));
+
     for (int i = 0; i < size; ++i) {
-        matrix_[i][i] = 4;
+        matrix_[i][i] = rand();
+        // matrix_[i][i] = 4;
+        // if (i + 1 < size) {
+        //     matrix_[i + 1][i] = 1;
+        //     matrix_[i][i + 1] = 1;
+        // }
         if (i + 1 < size) {
-            matrix_[i + 1][i] = 1;
-            matrix_[i][i + 1] = 1;
+            matrix_[i + 1][i] = rand() / 100000;
+            matrix_[i][i + 1] = rand() / 100000;
         }
+        // if (i + 2 < size) {
+        //     matrix_[i + 2][i] = rand() / 100000;
+        //     matrix_[i][i + 2] = rand() / 100000;
+        // }
     } 
+
+    // for (int i = 0; i < size; ++i) {
+    //     matrix_[i][i] = 4;
+    //     if (i + 1 < size) {
+    //         matrix_[i + 1][i] = 1;
+    //         matrix_[i][i + 1] = 1;
+    //     }
+    // } 
     Matrix_CSR matrix(matrix_);
     double *x = new double [size];
     double *b = new double [size];
@@ -205,5 +269,5 @@ int main() {
     for (int i = 0; i < size; ++i) {
         x[i] -= my_x[i];
     }
-    cout << dnrm2_(&size, x, &ione) << endl;
+    cout << "error - " << dnrm2_(&size, x, &ione) << endl;
 }

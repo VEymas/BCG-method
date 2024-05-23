@@ -14,24 +14,43 @@ namespace {
     const double done = 1;
 }
 
-extern "C" { // Scales a vector by a constant
-    void dscal_(const int *, const double *, double *, const int *);
+void dscal(int size, double alpha, double* vec) {
+    #pragma omp parallel for
+    for (int i = 0; i < size; ++i) {
+        vec[i] *= alpha;
+    }
 }
 
-extern "C" { // Vector copy
-    void dcopy_(const int *, const double *, const int *, double *, const int *);
+void dcopy(int size, double* vec1, double* vec2) { //vec2 = vec1
+    #pragma omp parallel for
+    for (int i = 0; i < size; ++i) {
+        vec2[i] = vec1[i];
+    }
 }
 
-extern "C" { // Dot product
-    double ddot_(const int *, const double *, const int *, const double *, const int *);
+double ddot(int size, double* vec1, double* vec2) {
+    double res = 0;
+    #pragma omp parallel for reduction(+:res)
+    for (int i = 0; i < size; ++i) {
+        res += vec1[i] * vec2[i];
+    }
+    return res;
 }
 
-extern "C" { // Vector norm
-    double dnrm2_(const int *, const double *, const int *);
+double dnrm2(int size, double* vec) {
+    double res = 0;
+    #pragma omp parallel for reduction(+:res)
+    for (int i = 0; i < size; ++i) {
+        res += vec[i] * vec[i];
+    }
+    return sqrt(res);
 }
 
-extern "C" { // y := a*x + y
-    void daxpy_(const int *, const double *, const double *, const int *, double *, const int *);
+void daxpy(int size, double alpha, double* vec1, double* vec2) { //vec2 = vec2 + alpha * vec1
+    #pragma omp parallel for
+    for (int i = 0; i < size; ++i) {
+        vec2[i] += alpha * vec1[i];
+    }
 }
 
 class Matrix_CSR { // CSR matrix format
@@ -116,28 +135,61 @@ void BCG(const T& matrix, const T& transpose_matrix, double *b, double *x, int s
     double* Az = new double[size];
     double* As = new double[size];
     matvec(matrix, x, Ax); // Ax := A * x
-    dcopy_(&size, b, &ione, r, &ione); // r := b
-    daxpy_(&size, &dnone, Ax, &ione, r, &ione); // r := b - A * x
-    dcopy_(&size, r, &ione, p, &ione); // p := r
-    dcopy_(&size, r, &ione, z, &ione); // z := r
-    dcopy_(&size, r, &ione, s, &ione); // s := r
+    dcopy(size, b, r); // r := b
+    daxpy(size, dnone, Ax, r); // r := b - A * x
+    #pragma omp parallel sections
+    {
+        #pragma omp section
+        {
+            dcopy(size, r, p); // p := r
+        }
+        #pragma omp section
+        {
+            dcopy(size, r, z); // z := r
+        }
+        #pragma omp section
+        {
+            dcopy(size, r, s); // s := r
+        }
+    }
     int iterations_cnt = 0;
-    double p_r_product = ddot_(&size, p, &ione, r, &ione);
+    double p_r_product = ddot(size, p, r);
     while (dnrm2_(&size, r, &ione) > 0.1) { // check r
         matvec(matrix, z, Az); // Az := A * z
-        double alpha = p_r_product / ddot_(&size, s, &ione, Az, &ione); // alpha := (p, r) / (s, Az)
-        matvec(transpose_matrix, s, As); // As := AT * s
-        daxpy_(&size, &alpha, z, &ione, x, &ione); // x := x + alpha * z
+        double alpha = p_r_product / ddot(size, s, Az); // alpha := (p, r) / (s, Az)
         double malpha = -1 * alpha;
-        daxpy_(&size, &malpha, Az, &ione, r, &ione); // r := r - alpha * Az
-        daxpy_(&size, &malpha, As, &ione, p, &ione); // p := p - alpha * As
+        matvec(transpose_matrix, s, As); // As := AT * s
+        #pragma omp parallel sections
+        {
+            #pragma omp section
+            {
+                daxpy(size, alpha, z, x); // x := x + alpha * z
+            }
+            #pragma omp section
+            {
+                daxpy(size, malpha, Az, r); // r := r - alpha * Az
+            }
+            #pragma omp section
+            {
+                daxpy(size, malpha, As, p); // p := p - alpha * As
+            }
+        }
         double prev_p_r_product = p_r_product;
-        p_r_product = ddot_(&size, p, &ione, r, &ione);
+        p_r_product = ddot(size, p, r);
         double beta = p_r_product / prev_p_r_product; // beta := (p, r) / (p,r)_prev
-        dscal_(&size, &beta, z, &ione); // z := beta * z
-        daxpy_(&size, &done, r, &ione, z, &ione); // z := beta * z + r
-        dscal_(&size, &beta, s, &ione); // s := beta * s
-        daxpy_(&size, &done, p, &ione, s, &ione); // s := beta * s + p
+        #pragma omp parallel sections
+        {
+            #pragma omp section
+            {
+                dscal(size, beta, z); // z := beta * z
+                daxpy(size, done, r, z); // z := beta * z + r
+            }
+            #pragma omp section
+            {
+                dscal(size, beta, s); // s := beta * s
+                daxpy(size, done, p, s); // s := beta * s + p
+            }
+        }
         ++iterations_cnt;
         if (iterations_cnt == max_iter) break; // check max_iter
     }
@@ -152,16 +204,34 @@ void BCG(const T& matrix, const T& transpose_matrix, double *b, double *x, int s
 }
 
 int main() {
-    int size = 10000;
+    int size = 20000;
     srand(time(0));
     vector<vector<double>> matrix_(size, vector<double>(size, 0));
+
     for (int i = 0; i < size; ++i) {
-        matrix_[i][i] = 4;
+        matrix_[i][i] = rand();
+        // matrix_[i][i] = 4;
+        // if (i + 1 < size) {
+        //     matrix_[i + 1][i] = 1;
+        //     matrix_[i][i + 1] = 1;
+        // }
         if (i + 1 < size) {
-            matrix_[i + 1][i] = 1;
-            matrix_[i][i + 1] = 1;
+            matrix_[i + 1][i] = rand() / 100000;
+            matrix_[i][i + 1] = rand() / 100000;
         }
+        // if (i + 2 < size) {
+        //     matrix_[i + 2][i] = rand() / 100000;
+        //     matrix_[i][i + 2] = rand() / 100000;
+        // }
     } 
+
+    // for (int i = 0; i < size; ++i) {
+    //     matrix_[i][i] = 4;
+    //     if (i + 1 < size) {
+    //         matrix_[i + 1][i] = 1;
+    //         matrix_[i][i + 1] = 1;
+    //     }
+    // } 
     Matrix_CSR matrix(matrix_);
     double *x = new double [size];
     double *b = new double [size];
@@ -181,5 +251,5 @@ int main() {
     for (int i = 0; i < size; ++i) {
         x[i] -= my_x[i];
     }
-    cout << dnrm2_(&size, x, &ione) << endl;
+    cout << "error - " << dnrm2(size, x) << endl;
 }
